@@ -2,26 +2,22 @@
 const axios = require('axios')
 const cheerio = require('cheerio')
 const tarball = require('download-package-tarball')
+const fs = require('fs')
+const { moveSync, removeSync } = require('fs-extra')
+const { join } = require('path')
+
 
 function downloadPackages (count, callback) {
   const offsets = genMostDependedOffsets(count)
-  console.log('OFFSETS: ', offsets)
-
   const mostDependedPromises = offsets.map(offset => getMostDependedInfo(offset))
 
   Promise.all(mostDependedPromises)
   .then((results) => {
     const packageNameArrays = results.map(result => extractPackageNames(result))
-    console.log('PACKAGE NAME ARRAYS: ', packageNameArrays)
     const packageNames = [].concat(...packageNameArrays)
-    console.log('PACKAGE NAMES: ', packageNames)
     const tarballUrls = []
 
-    packageNames.forEach((name, index) => {
-      if ( index < count) {
-        tarballUrls.push(getLatestTarballUrl(name))
-      }
-    })
+    packageNames.forEach((name, index) => index < count ? tarballUrls.push(getLatestTarballUrl(name)) : '')
     return Promise.all(tarballUrls)
   })
   .then((urls) => {
@@ -32,17 +28,34 @@ function downloadPackages (count, callback) {
     return Promise.all(tarballPromises)
   })
   .then(() => {
-    console.log("HERE")
+    flattenScopedPackages()
     callback()
+  })
+}
+
+function flattenScopedPackages () {
+  const files = fs.readdirSync('./packages')
+  files.forEach((file) => {
+    if (file[0] === '@') {
+      const scopedPackages = fs.readdirSync(`./packages/${file}`)
+      scopedPackages.forEach((scopedPackage) => moveToRootPackages(scopedPackage, file))
+      removeSync(`./packages/${file}`)
+    }
+  })
+}
+
+function moveToRootPackages(scopedPackage, parentPackage) {
+  const childDir = `./packages/${parentPackage}/${scopedPackage}`
+  const files = fs.readdirSync(childDir)
+  files.forEach((file) => {
+    moveSync(join(childDir, file), join('./packages',`${parentPackage}-${scopedPackage}`, file), { overwrite: true })
   })
 }
 
 function genMostDependedOffsets (count) {
   const numOffsets = Math.ceil(count / 36)
-  console.log('NUMOFFSETS: ', numOffsets)
   const offsets = []
   for (let i = 0; i < numOffsets; i++ ) {
-    console.log('I: ', i)
     offsets.push(i * 36)
   }
   return offsets
@@ -56,15 +69,18 @@ function getMostDependedInfo (offset) {
 function getTarball (url) {
   return tarball({
     url,
-    dir: './packages'
+    dir: `./packages`
   })
 }
 
 function getLatestTarballUrl (name) {
-  return axios.get(`https://registry.npmjs.org/${name}`)
+  return axios.get(`https://registry.npmjs.org/${name.replace('/','%2F')}`)
     .then((res) => {
       const { 'dist-tags': currentVersions, versions  } = res.data
       return versions[currentVersions.latest].dist.tarball
+    })
+    .catch((err) => {
+      return 'FAILED URL'
     })
 }
 
