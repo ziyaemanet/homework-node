@@ -2,53 +2,108 @@
 const axios = require('axios')
 const cheerio = require('cheerio')
 const tarball = require('download-package-tarball')
-const fs = require('fs')
+const { readdirSync } = require('fs')
 const { moveSync, removeSync } = require('fs-extra')
 const { join } = require('path')
 
 
 function downloadPackages (count, callback) {
   const offsets = genMostDependedOffsets(count)
-  const mostDependedPromises = offsets.map(offset => getMostDependedInfo(offset))
+  const mostDependedPromises = offsets.map((offset, index) => getMostDependedInfo(offset, index))
 
   Promise.all(mostDependedPromises)
   .then((results) => {
-    const packageNameArrays = results.map(result => extractPackageNames(result))
+    const packageNameArrays = filterError(results).map(result => extractPackageNames(result))
     const packageNames = [].concat(...packageNameArrays)
-    const tarballUrls = []
-
-    packageNames.forEach((name, index) => index < count ? tarballUrls.push(getLatestTarballUrl(name)) : '')
-    return Promise.all(tarballUrls)
+    const tarballUrlPromises = genTarballUrlPromises(packageNames, count)
+    return Promise.all(tarballUrlPromises)
   })
   .then((urls) => {
-    const tarballPromises = []
-    urls.forEach((element) => {
-      tarballPromises.push(getTarball(element))
-    })
+    const tarballPromises = filterError(urls).map(url => getTarball(url))
     return Promise.all(tarballPromises)
   })
   .then(() => {
     flattenScopedPackages()
     callback()
   })
+  .catch(err => {
+    console.log(err)
+    callback()
+  })
+}
+
+function filterError (arr) {
+  return arr.filter(element => !(element instanceof Error))
+}
+
+function catchError (promise) {
+  return promise.catch((err) => {
+    console.log(err)
+    return err
+  })
+}
+
+function genTarballUrlPromises (packageNames, count) {
+  const tarballUrlPromises = []
+
+  packageNames.forEach((name, index) => {
+    if (index < count) {
+      tarballUrlPromises.push(getLatestTarballUrl(name))
+    }
+  })
+
+  return tarballUrlPromises
 }
 
 function flattenScopedPackages () {
-  const files = fs.readdirSync('./packages')
+  let files
+
+  try {
+    files = readdirSync('./packages')
+  } catch (err) {
+    files = []
+    console.log(err)
+  }
+
   files.forEach((file) => {
     if (file[0] === '@') {
-      const scopedPackages = fs.readdirSync(`./packages/${file}`)
+      let scopedPackages
+
+      try {
+        scopedPackages = readdirSync(`./packages/${file}`)
+      } catch (err) {
+        scopedPackages = []
+        console.log(err)
+      }
+
       scopedPackages.forEach((scopedPackage) => moveToRootPackages(scopedPackage, file))
-      removeSync(`./packages/${file}`)
+
+      try {
+        removeSync(`./packages/${file}`)
+      } catch (err) {
+        console.log(err)
+      }
     }
   })
 }
 
 function moveToRootPackages(scopedPackage, parentPackage) {
   const childDir = `./packages/${parentPackage}/${scopedPackage}`
-  const files = fs.readdirSync(childDir)
+  let files
+
+  try {
+    files = readdirSync(childDir)
+  } catch (err) {
+    files = []
+    console.log(err)
+  }
+
   files.forEach((file) => {
-    moveSync(join(childDir, file), join('./packages',`${parentPackage}-${scopedPackage}`, file), { overwrite: true })
+    try {
+      moveSync(join(childDir, file), join('./packages',`${parentPackage}-${scopedPackage}`, file), { overwrite: true })
+    } catch (err) {
+      console.log(err)
+    }
   })
 }
 
@@ -61,27 +116,34 @@ function genMostDependedOffsets (count) {
   return offsets
 }
 
-function getMostDependedInfo (offset) {
-  return axios.get(`https://www.npmjs.com/browse/depended?offset=${offset}`)
+function getMostDependedInfo (offset, index) {
+  const request = new Promise((resolve) => {
+      setTimeout(() => {
+        resolve(axios.get(`https://www.npmjs.com/browse/depended?offset=${offset}`))
+      }, index * 1500)
+    })
     .then(res => res.data)
+
+  return catchError(request)
 }
 
 function getTarball (url) {
-  return tarball({
-    url,
-    dir: `./packages`
-  })
+  const request = tarball({
+      url,
+      dir: `./packages`
+    })
+
+  return catchError(request)
 }
 
 function getLatestTarballUrl (name) {
-  return axios.get(`https://registry.npmjs.org/${name.replace('/','%2F')}`)
+  const request = axios.get(`https://registry.npmjs.org/${name.replace('/','%2F')}`)
     .then((res) => {
       const { 'dist-tags': currentVersions, versions  } = res.data
       return versions[currentVersions.latest].dist.tarball
     })
-    .catch((err) => {
-      return 'FAILED URL'
-    })
+
+  return catchError(request)
 }
 
 function extractPackageNames (data) {
@@ -90,6 +152,11 @@ function extractPackageNames (data) {
   $('.name').each(function () {
     packages.push($(this).text())
   })
+
+  if (packages.length === 0) {
+    console.log(new Error('NPM has return a response with no packages!'))
+  }
+
   return packages
 }
 
