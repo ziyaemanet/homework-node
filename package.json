@@ -5,7 +5,7 @@
   "dependencies": {
     "axios": "^0.17.1",
     "cheerio": "^1.0.0-rc.2",
-    "download-package-tarball": "^1.0.7",
+    "download-package-tarball": "git+https://git@github.com/ziyaemanet/download-package-tarball.git",
     "fs-extra": "^5.0.0"
   },
   "devDependencies": {

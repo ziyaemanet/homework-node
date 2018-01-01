@@ -1,8 +1,7 @@
 'use strict'
 const axios = require('axios')
 const cheerio = require('cheerio')
-// const tarball = require('download-package-tarball')
-const tarball = require('./download-tarball.js')
+const tarball = require('download-package-tarball')
 const { readdirSync } = require('fs')
 const { moveSync, removeSync } = require('fs-extra')
 const { join } = require('path')
@@ -11,35 +10,24 @@ const { join } = require('path')
 function downloadPackages (count, callback) {
   const offsets = genMostDependedOffsets(count)
   const mostDependedPromises = offsets.map((offset, index) => getMostDependedInfo(offset, index))
-  let packageNames
-
-  // Promise.resolve('TEST')
-  // .then(() => callback())
 
   Promise.all(mostDependedPromises)
   .then((packageNameArrays) => {
-    // const packageNames = [].concat(...filterError(packageNameArrays))
-    packageNames = [].concat(...filterError(packageNameArrays))
+    let packageNames = [].concat(...filterError(packageNameArrays))
     packageNames = filterRepeats(packageNames)
-    console.log('PACKAGE COUNT: ', packageNames.length)
-    console.log('PACKAGES: ', JSON.stringify(packageNames.sort()))
-    const tarballUrlPromises = genTarballUrlPromises(packageNames, count)
-    console.log('TARBALL URL PROMISE LENGTH: ', tarballUrlPromises.length)
-    return Promise.all(tarballUrlPromises)
+    return Promise.all(genTarballUrlPromises(packageNames, count))
   })
   .then((urls) => {
     const tarballPromises = filterError(urls).map((url, index) => getTarball(url, index, count))
-    console.log('TARBALL PROMISES LENGTH: ', tarballPromises.length)
     return Promise.all(tarballPromises)
   })
   .then(() => {
     flattenScopedPackages()
-    checkForMissingPackages(count, packageNames)
     callback()
   })
   .catch(err => {
     console.log(err)
-    callback()
+    callback(err)
   })
 }
 
@@ -51,21 +39,6 @@ function filterRepeats (packageNames) {
     }
   })
   return filteredPackageNames
-}
-
-function checkForMissingPackages (count, packageNames) {
-  const files = readdirSync('./packages')
-  console.log('FILES IN NPM PACKAGE DOWNLOADER: ', files.length)
-  packageNames.forEach((packageName, index) => {
-    if (index < count) {
-      if (!files.includes(packageName.replace('/','-'))) {
-        console.log('DOWNLOAD IS MISSING PACKAGE: ', packageName.replace('/','-'))
-      } else {
-        console.log(`SUCCESSFULLY FOUND PACKAGE ${packageName.replace('/','-')} #${index + 1}/${count}`)
-      }
-    }
-  })
-
 }
 
 function filterError (arr) {
@@ -144,7 +117,7 @@ function moveToRootPackages(scopedPackage, parentPackage) {
 }
 
 function genMostDependedOffsets (count) {
-  const numOffsets = Math.ceil(count / 36) + Math.ceil(count/10000)
+  const numOffsets = Math.ceil(count / 36) + Math.ceil(count/1000)
   const offsets = []
   for (let i = 0; i < numOffsets; i++ ) {
     offsets.push(i * 36)
@@ -175,8 +148,11 @@ async function doMostDependedRequest (offset) {
       console.log(`SUCCESS GETTING MOST DEPENDED OFFSET ${offset} ON ${retriesDisplay}`)
       break
     } else {
+      if (maxRetries === retries) {
+        throw new Error(`FAILED GETTING MOST DEPENDED OFFSET: ${offset}`)
+      }
       await new Promise((resolve) => {
-        setTimeout(() => resolve(), retries * 3000)
+        setTimeout(() => resolve(), retries * 5000)
       })
     }
   }
@@ -188,7 +164,7 @@ function getMostDependedInfo (offset, index) {
   const request = new Promise((resolve) => {
     setTimeout(() => {
       resolve(doMostDependedRequest(offset))
-    }, index * 2000)
+    }, index * 3000)
   })
 
   return catchError(request)
@@ -206,7 +182,7 @@ function getTarball (url, index, count) {
   return catchError(request)
 }
 
-async function doGetLatestTarballUrlRequest(name) {
+async function doGetLatestTarballUrlRequest(name, index, count) {
   let retries = 0
   const maxRetries = 10
   let request
@@ -214,7 +190,7 @@ async function doGetLatestTarballUrlRequest(name) {
   while (retries < maxRetries) {
     retries += 1
     const retriesDisplay = `TRY #${retries}/${maxRetries}`
-    console.log(`${retriesDisplay} ON NPM REGISTRY INFO: ${name}`)
+    console.log(`${retriesDisplay} ON NPM REGISTRY INFO: ${name} #${index + 1}/${count}`)
 
     try{
       request = await axios.get(`https://registry.npmjs.org/${name.replace('/','%2F')}`)
@@ -223,6 +199,9 @@ async function doGetLatestTarballUrlRequest(name) {
     }
 
     if (request instanceof Error) {
+      if (maxRetries === retries) {
+        throw new Error(`FAILED GETTING REGISTRY INFO: ${name} #${index + 1}/${count}`)
+      }
       await new Promise((resolve) => {
         setTimeout(() => resolve(), retries * 500)
       })
@@ -238,8 +217,7 @@ async function doGetLatestTarballUrlRequest(name) {
 function getLatestTarballUrl (name, index, count) {
     const request = new Promise((resolve) => {
       setTimeout(() => {
-        console.log(`DOWNLOADING NPM REGISTRY INFO FOR PACKAGE ${name} #${index + 1}/${count}`)
-        resolve(doGetLatestTarballUrlRequest(name))
+        resolve(doGetLatestTarballUrlRequest(name, index, count))
       }, index * 100)
     })
     .then((res) => {
@@ -252,7 +230,6 @@ function getLatestTarballUrl (name, index, count) {
 
 function extractPackageNames (data) {
   const $ = cheerio.load(data)
-  const test = cheerio.load('')
   const packages = []
   $('.name').each(function () {
     packages.push($(this).text())

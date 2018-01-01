@@ -9,7 +9,7 @@ const download = require('./')
 test('download', function (t) {
   t.plan(3)
 
-  const COUNT = parseInt(process.env.COUNT, 10) || 1500
+  const COUNT = parseInt(process.env.COUNT, 10) || 10
 
   series([
     (callback) => download(COUNT, callback),
@@ -22,10 +22,7 @@ test('download', function (t) {
     fs.readdir('./packages', function (err, files) {
       if (err) return callback(err)
       // Filter .gitignore and other hidden files
-      console.log('FILES LENGTH IN TEST: ', files.length)
-      console.log('FILES: ', JSON.stringify(files))
       files = files.filter((file) => !/^\./.test(file))
-      console.log('FILES AFTER FILTER IN TEST: ', files.length)
       t.equal(files.length, COUNT, `has ${COUNT} files`)
       callback()
     })
